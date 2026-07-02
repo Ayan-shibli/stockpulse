@@ -32,6 +32,7 @@ Thumbs.db
 !.env.example
 !.env.development
 !.env.production
+!.env.railway
 .env.local
 
 # Runtime / model cache (rebuilt on deploy)
