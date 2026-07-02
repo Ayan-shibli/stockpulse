@@ -1,4 +1,3 @@
-api/
 research_agent/
 *.pt
 *.pyc
