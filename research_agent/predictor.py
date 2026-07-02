@@ -454,37 +454,43 @@ def _decode_return(
     """
     Decode normalised model output → daily % return.
 
-    Key fix: amplify deviation from neutral (0.5) by 4x so that even
-    small model signals produce visible price movement. Without this
-    amplification, a model outputting 0.52 (slightly bullish) would
-    produce only 0.4% move which rounds to flat on a chart.
+    Design: the model provides the TREND DIRECTION BIAS,
+    calibrated noise provides the DAY-TO-DAY JITTER.
+    This mimics how real stocks move: a downtrend doesn't fall
+    every single day — it has up days and down days that average to a fall.
 
-    Uses RSI + MACD as directional confirmation signals.
-    Adds calibrated noise to produce jagged natural-looking movement.
+    Weights:
+      35% momentum (recent price trend)
+      30% calibrated noise (realistic daily jitter — key for jaggedness)
+      20% model signal (amplified deviation from neutral)
+      10% RSI bias (overbought/oversold correction)
+       5% MACD bias (trend confirmation)
     """
+    # Model signal: amplify deviation from neutral 0.5
     deviation = avg_norm - 0.5
-    model_pct = deviation * 4.0 * 20  # 4x amplification (was 3x)
+    model_pct = deviation * 5.0 * 20  # 5x amplification
 
-    # RSI bias: overbought → bearish nudge, oversold → bullish nudge
+    # RSI mean-reversion bias
     rsi_bias = 0.0
     if rsi_val > 0.7:
-        rsi_bias = -hist_vol * 0.4
+        rsi_bias = -hist_vol * 0.5  # overbought → expect pullback
     elif rsi_val < 0.3:
-        rsi_bias = hist_vol * 0.4
+        rsi_bias = hist_vol * 0.5  # oversold → expect bounce
 
     # MACD directional bias
     macd_bias = (macd_val - 0.5) * hist_vol * 0.6
 
-    # Noise for jagged visual (calibrated to 25% of historical vol)
+    # Calibrated noise — this is what makes each day different
+    # Mean=0 so it doesn't bias the trend, just adds realistic daily variance
     noise = np.random.normal(0, noise_std) if noise_std > 0 else 0.0
 
-    # Weighted blend
+    # Final blend
     ret_pct = (
-        model_pct * 0.35
-        + momentum * 0.35
-        + rsi_bias * 0.15
-        + macd_bias * 0.10
-        + noise * 0.05
+        momentum * 0.35
+        + noise * 0.30
+        + model_pct * 0.20
+        + rsi_bias * 0.10
+        + macd_bias * 0.05
     )
 
     vol_cap = (
@@ -555,42 +561,54 @@ def _rollout(
     models: list, features: np.ndarray, prices: np.ndarray, n_days: int
 ) -> List[float]:
     """
-    Autoregressive rollout using LSTM + Transformer ensemble.
-    Majority-vote direction scaling reduces overconfident moves.
+    Autoregressive rollout — produces jagged, realistic day-by-day movement.
+
+    Key fixes for straight-line problem:
+      1. noise_std = hist_vol * 0.8  (was 0.25) — much stronger noise
+      2. Momentum is REFRESHED each step from recent predicted prices
+         instead of decaying from a single starting value
+      3. RSI and MACD updated each step from new predicted prices
+      4. Model signal amplified 5x (was 4x) to overcome flat outputs
     """
     p_min, p_max = prices.min(), prices.max()
     rng = p_max - p_min if p_max != p_min else 1.0
 
     feat_window = features[-SEQ_LEN:].tolist()
-    ctx = list(prices[-30:])
+    ctx = list(prices[-30:])  # rolling price context
     last_price = float(prices[-1])
     future: List[float] = []
 
     hist_rets = np.diff(prices) / prices[:-1] * 100
     hist_vol = float(np.std(hist_rets[-30:])) if len(hist_rets) >= 30 else 1.0
+
+    # Initial momentum from last 5 real days
     momentum = float(np.mean(hist_rets[-5:])) if len(hist_rets) >= 5 else 0.0
     sent_n = float(features[-1, 3]) if features.shape[1] > 3 else 0.5
-    last_rsi = float(features[-1, 5]) if features.shape[1] > 5 else 0.5
-    last_macd = float(features[-1, 6]) if features.shape[1] > 6 else 0.5
-    noise_std = hist_vol * 0.25  # 25% of historical vol for jagged movement
+
+    # Stronger noise = realistic jagged movement (not straight line)
+    # 80% of daily vol per step so the line looks like real stock movement
+    noise_std = hist_vol * 0.8
 
     for m in models:
         m.eval()
 
     with torch.no_grad():
-        for _ in range(n_days):
+        for step in range(n_days):
             seq = torch.tensor(feat_window[-SEQ_LEN:], dtype=torch.float32).unsqueeze(0)
-
-            # Get all predictions
             preds = [m(seq).item() for m in models]
             avg_norm = float(np.mean(preds))
 
-            # Direction vote: dampen move when models disagree
+            # Direction agreement vote
             votes = [1 if p > 0.5 else -1 for p in preds]
             agreement = abs(sum(votes)) / len(votes)
 
+            # Get CURRENT RSI and MACD from the rolling feature window
+            # (updated each step so each day gets fresh signals)
+            cur_rsi = float(feat_window[-1][5]) if len(feat_window[-1]) > 5 else 0.5
+            cur_macd = float(feat_window[-1][6]) if len(feat_window[-1]) > 6 else 0.5
+
             ret_pct = _decode_return(
-                avg_norm, momentum, hist_vol, last_rsi, last_macd, noise_std
+                avg_norm, momentum, hist_vol, cur_rsi, cur_macd, noise_std
             )
             ret_pct *= 0.5 + 0.5 * agreement
 
@@ -602,7 +620,18 @@ def _rollout(
                 _next_row(nxt_price, feat_window[-1], ctx, p_min, rng, sent_n)
             )
             last_price = nxt_price
-            momentum *= 0.82
+
+            # FIX: refresh momentum from last 3 predicted prices each step
+            # instead of decaying from a single starting value.
+            # This means each day's momentum reflects where we are NOW,
+            # not where we started 7 days ago — producing natural reversals.
+            if len(ctx) >= 3:
+                recent_ctx = ctx[-3:]
+                step_rets = np.diff(recent_ctx) / np.array(recent_ctx[:-1]) * 100
+                new_momentum = float(np.mean(step_rets))
+                # Blend: 60% fresh momentum, 40% carry-forward
+                # This allows reversals (rise after fall) not just monotone decay
+                momentum = new_momentum * 0.6 + momentum * 0.4
 
     return future
 

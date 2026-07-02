@@ -1,0 +1,9 @@
+api/
+research_agent/
+*.pt
+*.pyc
+__pycache__/
+.venv/
+start.ps1
+start_backend.bat
+start_frontend.bat
