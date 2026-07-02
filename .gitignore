@@ -28,4 +28,19 @@ Thumbs.db
 
 # Environment
 .env
+*.env
+!.env.example
+!.env.development
+!.env.production
 .env.local
+
+# Runtime / model cache (rebuilt on deploy)
+research_agent/model_cache/*.pt
+research_agent/model_cache/*.json
+research_agent/model_cache/*_ftlog.json
+research_agent/predictions_log.json
+research_agent/sentiment_cache.json
+
+# Misc
+*.bak
+predictor_fixed.py

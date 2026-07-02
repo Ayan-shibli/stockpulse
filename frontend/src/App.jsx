@@ -9,7 +9,7 @@ import CompareMode from './components/CompareMode'
 import AgeGate from './components/AgeGate'
 import axios from 'axios'
 
-const API_BASE = ''  // Vite proxy forwards /api/* → http://localhost:8001
+const API_BASE = import.meta.env.VITE_API_URL || ''
 
 const fadeUp = {
   initial: { opacity: 0, y: 24 },

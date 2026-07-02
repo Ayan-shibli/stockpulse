@@ -35,7 +35,7 @@ function TickerStrip() {
   useEffect(() => {
     // Fetch live prices on mount, refresh every 60 seconds
     const load = () => {
-      fetch('/api/prices')
+      fetch(`${import.meta.env.VITE_API_URL || ''}/api/prices`)
         .then(r => r.json())
         .then(data => {
           if (data.prices && data.prices.length > 0) setTickers(data.prices)

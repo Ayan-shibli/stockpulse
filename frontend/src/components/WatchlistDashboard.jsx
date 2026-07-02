@@ -5,7 +5,7 @@ import {
   Star, Trash2, ArrowRight, BarChart2, Loader2
 } from 'lucide-react'
 
-const API_BASE = ''
+const API_BASE = import.meta.env.VITE_API_URL || ''
 
 const cardAnim = {
   initial: { opacity: 0, y: 16 },

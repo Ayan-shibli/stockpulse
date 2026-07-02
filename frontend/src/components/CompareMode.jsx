@@ -5,7 +5,7 @@ import {
   Target, Shield, Zap, Activity, BarChart2, Scale, ArrowLeft
 } from 'lucide-react'
 
-const API_BASE = ''
+const API_BASE = import.meta.env.VITE_API_URL || ''
 
 const cardAnim = {
   initial: { opacity: 0, y: 16 },

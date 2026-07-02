@@ -4,6 +4,7 @@ v2: WebSocket streaming, rate limiting, price caching, watchlist, comparison.
 """
 
 import asyncio
+import os
 import re
 import time
 from collections import defaultdict
@@ -30,9 +31,17 @@ import json
 
 app = FastAPI(title="StockPulse — LangGraph Research API", version="3.0.0")
 
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    os.environ.get("FRONTEND_URL", ""),
+    "https://stockpulse.vercel.app",
+]
+ALLOWED_ORIGINS = [o for o in ALLOWED_ORIGINS if o]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

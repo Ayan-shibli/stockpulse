@@ -10,7 +10,7 @@ import {
   XCircle, Clock, BarChart2, Newspaper, FlaskConical, Zap, Sparkles
 } from 'lucide-react'
 
-const API_BASE = ''
+const API_BASE = import.meta.env.VITE_API_URL || ''
 
 // ─── Custom Tooltip ───────────────────────────────────────────────────────────
 function ChartTooltip({ active, payload, label }) {
