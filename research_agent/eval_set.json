@@ -1,0 +1,106 @@
+[
+  {
+    "ticker": "AAPL",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "neutral",
+    "expected_key_facts": [
+      "Apple is facing ongoing antitrust scrutiny from the EU over App Store practices",
+      "iPhone 17 series expected to launch in September 2026 with AI-native features",
+      "Apple Intelligence rollout continuing across supported devices",
+      "Services revenue remains the fastest-growing segment",
+      "Warren Buffett has reduced its AAPL position over recent quarters"
+    ],
+    "notes": "AAPL trading near all-time highs. Strong fundamentals offset by regulatory headwinds."
+  },
+  {
+    "ticker": "NVDA",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "bullish",
+    "expected_key_facts": [
+      "NVDA dominates AI accelerator market with 70-80% GPU market share",
+      "Blackwell architecture GB200 ramping production for hyperscaler customers",
+      "Data center revenue now accounts for over 80% of total revenue",
+      "Export controls on H100 to China remain a risk",
+      "Competition from AMD MI300X and custom silicon increasing"
+    ],
+    "notes": "Clearest AI infrastructure play. Bullish on demand backlog."
+  },
+  {
+    "ticker": "TSLA",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "neutral",
+    "expected_key_facts": [
+      "Tesla facing increased EV competition from BYD in China",
+      "Cybertruck production ramping but facing quality questions",
+      "Full Self-Driving v12 using end-to-end neural net approach",
+      "Energy storage Megapack business growing strongly",
+      "Elon Musk divided attention across multiple companies"
+    ],
+    "notes": "Mixed fundamentals. Margins under pressure from price cuts."
+  },
+  {
+    "ticker": "MSFT",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "bullish",
+    "expected_key_facts": [
+      "Azure cloud revenue growing 25% YoY driven by AI workloads",
+      "Copilot integration across Office 365 driving enterprise upsell",
+      "GitHub Copilot has over 1.5 million paid subscribers",
+      "Activision Blizzard acquisition integration ongoing",
+      "EU regulatory scrutiny of Teams bundling"
+    ],
+    "notes": "Most diversified AI play. Strong FCF and dividend history."
+  },
+  {
+    "ticker": "META",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "bullish",
+    "expected_key_facts": [
+      "Meta AI assistant integrated across WhatsApp Instagram Facebook",
+      "Llama open-source models gaining enterprise adoption",
+      "Reality Labs still losing billions per quarter",
+      "Ad revenue recovering strongly after iOS privacy changes",
+      "Threads growing as Twitter alternative with 200M monthly active users"
+    ],
+    "notes": "Strong recovery from 2022 lows. Year of Efficiency improved margins dramatically."
+  },
+  {
+    "ticker": "PLTR",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "bullish",
+    "expected_key_facts": [
+      "Palantir AIP driving strong commercial revenue growth",
+      "US Government contracts remain the core business",
+      "Added to S&P 500 in September 2024",
+      "Valuation extremely high relative to revenue",
+      "CEO Alex Karp positioning as AI defence technology company"
+    ],
+    "notes": "High-conviction AI analytics play but valuation is stretched."
+  },
+  {
+    "ticker": "COIN",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "neutral",
+    "expected_key_facts": [
+      "Coinbase revenue highly correlated with crypto market volumes",
+      "SEC lawsuit regulatory clarity improving for US crypto exchanges",
+      "Base L2 network growing as blockchain infrastructure play",
+      "Bitcoin ETF approvals driving institutional volume",
+      "Competition from Binance internationally and Kraken domestically"
+    ],
+    "notes": "Leveraged bet on crypto market activity. Improving regulatory environment."
+  },
+  {
+    "ticker": "AMD",
+    "date_checked": "2026-06-28",
+    "expected_sentiment": "bullish",
+    "expected_key_facts": [
+      "MI300X GPU gaining traction as alternative to NVIDIA H100",
+      "Ryzen and EPYC CPU taking market share from Intel",
+      "Data centre GPU revenue ramping rapidly",
+      "Intel struggles create opportunity for AMD market share",
+      "Lisa Su execution track record gives roadmap confidence"
+    ],
+    "notes": "Clearest NVDA alternative in AI hardware. ROCm vs CUDA still a gap."
+  }
+]

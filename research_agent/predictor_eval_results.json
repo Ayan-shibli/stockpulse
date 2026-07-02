@@ -1,0 +1,511 @@
+{
+  "metrics": {
+    "avg_daily_direction_accuracy": 46.43,
+    "avg_price_error": 5.57,
+    "overall_trend_accuracy_rate": 50.0,
+    "grade_distribution": {
+      "A": 1,
+      "B": 5,
+      "C": 0,
+      "D": 2
+    }
+  },
+  "results": [
+    {
+      "ticker": "AAPL",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 28.6,
+      "avg_price_error": 4.63,
+      "overall_direction": "rise",
+      "actual_direction": "fall",
+      "direction_correct": false,
+      "grade": "B",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 297.6973,
+          "actual": 298.01,
+          "error_pct": 0.11,
+          "hit": true
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 299.4261,
+          "actual": 297.01,
+          "error_pct": -0.81,
+          "hit": false
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 301.1871,
+          "actual": 294.3,
+          "error_pct": -2.29,
+          "hit": false
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 303.0012,
+          "actual": 293.08,
+          "error_pct": -3.27,
+          "hit": false
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 304.8669,
+          "actual": 275.15,
+          "error_pct": -9.75,
+          "hit": false
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 306.7779,
+          "actual": 283.78,
+          "error_pct": -7.5,
+          "hit": true
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 308.7281,
+          "actual": 281.96,
+          "error_pct": -8.67,
+          "hit": false
+        }
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 28.6,
+      "avg_price_error": 5.99,
+      "overall_direction": "rise",
+      "actual_direction": "fall",
+      "direction_correct": false,
+      "grade": "B",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 206.4049,
+          "actual": 210.69,
+          "error_pct": 2.08,
+          "hit": true
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 208.083,
+          "actual": 208.65,
+          "error_pct": 0.27,
+          "hit": false
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 209.7447,
+          "actual": 200.04,
+          "error_pct": -4.63,
+          "hit": false
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 211.4794,
+          "actual": 199.0,
+          "error_pct": -5.9,
+          "hit": false
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 213.2821,
+          "actual": 195.74,
+          "error_pct": -8.22,
+          "hit": false
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 215.1344,
+          "actual": 192.53,
+          "error_pct": -10.51,
+          "hit": false
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 217.0207,
+          "actual": 194.66,
+          "error_pct": -10.3,
+          "hit": true
+        }
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 57.1,
+      "avg_price_error": 4.41,
+      "overall_direction": "rise",
+      "actual_direction": "rise",
+      "direction_correct": true,
+      "grade": "B",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 399.2553,
+          "actual": 400.49,
+          "error_pct": 0.31,
+          "hit": true
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 401.8022,
+          "actual": 405.05,
+          "error_pct": 0.81,
+          "hit": true
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 404.1763,
+          "actual": 381.61,
+          "error_pct": -5.58,
+          "hit": false
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 406.5329,
+          "actual": 375.53,
+          "error_pct": -7.63,
+          "hit": false
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 408.9504,
+          "actual": 375.12,
+          "error_pct": -8.27,
+          "hit": false
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 411.4321,
+          "actual": 379.71,
+          "error_pct": -7.71,
+          "hit": true
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 413.9533,
+          "actual": 411.51,
+          "error_pct": -0.59,
+          "hit": true
+        }
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 57.1,
+      "avg_price_error": 1.63,
+      "overall_direction": "fall",
+      "actual_direction": "fall",
+      "direction_correct": true,
+      "grade": "B",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 376.143,
+          "actual": 379.4,
+          "error_pct": 0.87,
+          "hit": false
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 373.5478,
+          "actual": 367.34,
+          "error_pct": -1.66,
+          "hit": true
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 371.1963,
+          "actual": 373.94,
+          "error_pct": 0.74,
+          "hit": false
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 369.0835,
+          "actual": 365.46,
+          "error_pct": -0.98,
+          "hit": true
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 367.1408,
+          "actual": 352.83,
+          "error_pct": -3.9,
+          "hit": true
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 365.334,
+          "actual": 372.97,
+          "error_pct": 2.09,
+          "hit": false
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 363.641,
+          "actual": 367.965,
+          "error_pct": 1.19,
+          "hit": true
+        }
+      ]
+    },
+    {
+      "ticker": "META",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 71.4,
+      "avg_price_error": 1.76,
+      "overall_direction": "fall",
+      "actual_direction": "fall",
+      "direction_correct": true,
+      "grade": "A",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 567.8582,
+          "actual": 577.22,
+          "error_pct": 1.65,
+          "hit": true
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 567.8441,
+          "actual": 563.85,
+          "error_pct": -0.7,
+          "hit": true
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 567.6587,
+          "actual": 562.2,
+          "error_pct": -0.96,
+          "hit": true
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 567.4471,
+          "actual": 557.67,
+          "error_pct": -1.72,
+          "hit": true
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 567.0549,
+          "actual": 542.87,
+          "error_pct": -4.27,
+          "hit": true
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 566.4441,
+          "actual": 550.25,
+          "error_pct": -2.86,
+          "hit": false
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 565.6783,
+          "actual": 564.5993,
+          "error_pct": -0.19,
+          "hit": false
+        }
+      ]
+    },
+    {
+      "ticker": "PLTR",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 28.6,
+      "avg_price_error": 12.97,
+      "overall_direction": "rise",
+      "actual_direction": "fall",
+      "direction_correct": false,
+      "grade": "D",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 131.3997,
+          "actual": 128.47,
+          "error_pct": -2.23,
+          "hit": false
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 132.1615,
+          "actual": 119.5,
+          "error_pct": -9.58,
+          "hit": false
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 132.9229,
+          "actual": 116.7,
+          "error_pct": -12.2,
+          "hit": false
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 133.7153,
+          "actual": 113.5,
+          "error_pct": -15.12,
+          "hit": false
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 134.5515,
+          "actual": 107.27,
+          "error_pct": -20.28,
+          "hit": false
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 135.4229,
+          "actual": 112.93,
+          "error_pct": -16.61,
+          "hit": true
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 136.3194,
+          "actual": 116.2201,
+          "error_pct": -14.74,
+          "hit": true
+        }
+      ]
+    },
+    {
+      "ticker": "COIN",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 42.9,
+      "avg_price_error": 8.66,
+      "overall_direction": "rise",
+      "actual_direction": "fall",
+      "direction_correct": false,
+      "grade": "D",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 166.2403,
+          "actual": 163.26,
+          "error_pct": -1.79,
+          "hit": false
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 167.3407,
+          "actual": 164.84,
+          "error_pct": -1.49,
+          "hit": true
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 168.2578,
+          "actual": 158.18,
+          "error_pct": -5.99,
+          "hit": false
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 169.0641,
+          "actual": 150.11,
+          "error_pct": -11.21,
+          "hit": false
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 169.8145,
+          "actual": 142.52,
+          "error_pct": -16.07,
+          "hit": false
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 170.5188,
+          "actual": 149.06,
+          "error_pct": -12.58,
+          "hit": true
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 171.1768,
+          "actual": 151.56,
+          "error_pct": -11.46,
+          "hit": true
+        }
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "days_back": 7,
+      "cutoff_date": "2026-06-17",
+      "direction_accuracy": 57.1,
+      "avg_price_error": 4.48,
+      "overall_direction": "rise",
+      "actual_direction": "rise",
+      "direction_correct": true,
+      "grade": "B",
+      "rows": [
+        {
+          "date": "2026-06-18",
+          "predicted": 522.0746,
+          "actual": 537.37,
+          "error_pct": 2.93,
+          "hit": true
+        },
+        {
+          "date": "2026-06-22",
+          "predicted": 530.7662,
+          "actual": 551.63,
+          "error_pct": 3.93,
+          "hit": true
+        },
+        {
+          "date": "2026-06-23",
+          "predicted": 538.7981,
+          "actual": 519.85,
+          "error_pct": -3.52,
+          "hit": false
+        },
+        {
+          "date": "2026-06-24",
+          "predicted": 546.4685,
+          "actual": 519.74,
+          "error_pct": -4.89,
+          "hit": false
+        },
+        {
+          "date": "2026-06-25",
+          "predicted": 553.796,
+          "actual": 532.57,
+          "error_pct": -3.83,
+          "hit": true
+        },
+        {
+          "date": "2026-06-26",
+          "predicted": 560.7792,
+          "actual": 521.58,
+          "error_pct": -6.99,
+          "hit": false
+        },
+        {
+          "date": "2026-06-29",
+          "predicted": 567.4286,
+          "actual": 537.59,
+          "error_pct": -5.26,
+          "hit": true
+        }
+      ]
+    }
+  ]
+}

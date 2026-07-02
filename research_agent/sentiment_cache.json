@@ -1,0 +1,52 @@
+{
+  "NVDA": {
+    "score": 0.17,
+    "label": "neutral",
+    "updated_at": "2026-06-29 19:13 UTC"
+  },
+  "GOOGL": {
+    "score": 0.3133,
+    "label": "bullish",
+    "updated_at": "2026-07-01 22:09 UTC"
+  },
+  "HBL.KA": {
+    "score": 0.0,
+    "label": "neutral",
+    "updated_at": "2026-06-28 21:09 UTC"
+  },
+  "AMZN": {
+    "score": 0.41,
+    "label": "bullish",
+    "updated_at": "2026-06-29 19:55 UTC"
+  },
+  "META": {
+    "score": 0.05,
+    "label": "neutral",
+    "updated_at": "2026-07-01 08:05 UTC"
+  },
+  "MSFT": {
+    "score": -0.243,
+    "label": "bearish",
+    "updated_at": "2026-06-29 19:12 UTC"
+  },
+  "OGDC.KA": {
+    "score": 0.0,
+    "label": "neutral",
+    "updated_at": "2026-06-29 11:51 UTC"
+  },
+  "NFLX": {
+    "score": 0.2488,
+    "label": "bullish",
+    "updated_at": "2026-06-29 19:19 UTC"
+  },
+  "PSO.KA": {
+    "score": -0.5,
+    "label": "bearish",
+    "updated_at": "2026-06-29 19:20 UTC"
+  },
+  "2668.HK": {
+    "score": 0.0,
+    "label": "neutral",
+    "updated_at": "2026-06-29 19:54 UTC"
+  }
+}
