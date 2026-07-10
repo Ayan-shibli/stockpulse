@@ -1,5 +1,4 @@
-# ============================================================
-# StockPulse — Start Backend + Frontend
+# AstraQuant — Start Backend + Frontend
 # Double-click or run from PowerShell:  .\start.ps1
 # ============================================================
 
@@ -7,7 +6,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "  StockPulse - Starting dev environment"           -ForegroundColor Cyan
+Write-Host "  AstraQuant - Starting dev environment"           -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 

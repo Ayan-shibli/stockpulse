@@ -9,3 +9,4 @@ groq
 langgraph
 numpy
 uvicorn
+xgboost>=2.0.0

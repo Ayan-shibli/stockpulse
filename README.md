@@ -1,4 +1,4 @@
-# StockPulse — AI Stock Research Agent
+# AstraQuant — AI Stock Research Agent
 
 > Real-time stock intelligence powered by a LangGraph multi-agent pipeline, Groq LLM, and a PyTorch LSTM ensemble forecaster.
 
@@ -12,7 +12,7 @@
 
 ## What it does
 
-Type any stock ticker or company name. StockPulse spins up a **4-node LangGraph agent** that fans out across five data tools, synthesises a structured research report, then self-critiques it with a reflector node before presenting results. Alongside the research, a **PyTorch LSTM ensemble** trains on 6 months of price history and forecasts the next 7 trading days with online learning via BPTT.
+Type any stock ticker or company name. AstraQuant spins up a **4-node LangGraph agent** that fans out across five data tools, synthesises a structured research report, then self-critiques it with a reflector node before presenting results. Alongside the research, a **PyTorch LSTM ensemble** trains on 6 months of price history and forecasts the next 7 trading days with online learning via BPTT.
 
 ---
 

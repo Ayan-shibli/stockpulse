@@ -57,7 +57,7 @@ export default function AboutModal({ open, onClose }) {
                 </svg>
               </div>
               <div>
-                <h2 className="about-modal-title">StockPulse</h2>
+                <h2 className="about-modal-title">AstraQuant</h2>
                 <p className="about-modal-subtitle">AI-Powered Stock Research Agent — v3.0</p>
               </div>
             </div>

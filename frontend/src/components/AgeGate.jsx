@@ -57,7 +57,7 @@ export default function AgeGate({ onVerified }) {
               </div>
               <h2 className="age-gate-title">Access Denied</h2>
               <p className="age-gate-subtitle">
-                Sorry, you must be 18 years or older to access StockPulse.
+                Sorry, you must be 18 years or older to access AstraQuant.
                 Please close this tab or navigate away.
               </p>
               <div className="age-gate-denied-bar" />

@@ -1,12 +1,19 @@
 """
-StockPulse Predictor v3 — Hybrid LSTM-Transformer Ensemble
+AstraQuant Predictor v4 — Multi-Horizon Classification Ensemble
 
 Architecture:
-  - LSTMPredictor: 2-layer LSTM + projection head (fast, good at sequences)
-  - TransformerPredictor: multi-head self-attention encoder (good at patterns)
-  - HybridEnsemble: weighted average of both (best of both worlds)
+  - LSTMPredictor: 2-layer LSTM + 3 classification heads (1d/3d/7d)
+  - TransformerPredictor: multi-head self-attention + 3 classification heads
+  - XGBoost: gradient boosted trees (3 classifiers, one per horizon)
+  - Ensemble: weighted average of all models' probabilities
 
-Features (12 total):
+Key improvements over v3:
+  1. No autoregressive rollout — predicts Day 1, 3, 7 directly from real data
+  2. Market context features (SPY momentum, VIX fear, relative strength)
+  3. Classification (4 return bins) instead of regression
+  4. XGBoost ensemble member for diversity
+
+Features (15 total):
   0  normalised price
   1  daily return
   2  5-day z-score
@@ -19,12 +26,15 @@ Features (12 total):
   9  rate of change (10-day)
   10 volume ratio
   11 macro fear index
+  12 SPY 5-day momentum (market trend)
+  13 VIX level (fear index)
+  14 Relative strength vs SPY
 
-Speed optimisation:
-  - LSTM: 40 epochs, hidden 64
-  - Transformer: 30 epochs (converges faster)
-  - Models trained in parallel-friendly order
-  - Cache valid 24h per ticker
+Classification bins (per horizon):
+  Bin 0: Strong Bear  (return < -2%)
+  Bin 1: Weak Bear    (return -2% to 0%)
+  Bin 2: Weak Bull    (return 0% to +2%)
+  Bin 3: Strong Bull  (return > +2%)
 """
 
 from __future__ import annotations
@@ -45,42 +55,73 @@ import yfinance as yf
 
 from sentiment_store import get_sentiment
 
+# ─── XGBoost (optional — graceful fallback) ───────────────────────────────────
+try:
+    import xgboost as xgb
+
+    HAS_XGBOOST = True
+except ImportError:
+    HAS_XGBOOST = False
+
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
 SEQ_LEN = 20
-N_FEATURES = 12
+N_FEATURES = 15  # 12 original + 3 market context
 PREDICT_DAYS = 7
 CACHE_HOURS = 24
 MAX_DAILY_RETURN_PCT = 5.0
 HISTORY_PERIOD = "2y"
 
+# Classification bins
+N_BINS = 4
+BIN_EDGES = [-float("inf"), -2.0, 0.0, 2.0, float("inf")]
+BIN_MIDPOINTS = np.array([-3.0, -1.0, 1.0, 3.0])  # representative return per bin
+HORIZONS = {"h1d": 1, "h3d": 3, "h7d": 7}
+
 # LSTM settings
 LSTM_HIDDEN = 64
 LSTM_LAYERS = 2
-LSTM_EPOCHS = 50
+LSTM_EPOCHS = 20   # reduced from 50 — fast enough for first-load, cache handles repeats
 LSTM_LR = 0.005
 
 # Transformer settings
 TF_DIM = 64  # model dimension
 TF_HEADS = 4  # attention heads
 TF_LAYERS = 2  # encoder layers
-TF_EPOCHS = 40
+TF_EPOCHS = 15   # reduced from 40
 TF_LR = 0.003
 
-# Ensemble: 2 LSTMs + 1 Transformer = 3 models total (fast but diverse)
+# Ensemble: 2 LSTMs + 1 Transformer + (optional) XGBoost
 N_LSTM = 2
 N_TRANSFORM = 1
+
+# Neural net vs XGBoost blend weights
+NN_WEIGHT = 0.6
+XGB_WEIGHT = 0.4
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "predictions_log.json")
 MODEL_CACHE_DIR = os.path.join(os.path.dirname(__file__), "model_cache")
 os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
 
 
+# ─── Classification Helper ───────────────────────────────────────────────────
+def _classify_return(pct_return: float) -> int:
+    """Assign a percentage return to one of 4 bins."""
+    if pct_return < -2.0:
+        return 0  # strong bear
+    elif pct_return < 0.0:
+        return 1  # weak bear
+    elif pct_return < 2.0:
+        return 2  # weak bull
+    else:
+        return 3  # strong bull
+
+
 # ─── Model 1: LSTM ───────────────────────────────────────────────────────────
 class LSTMPredictor(nn.Module):
     """
-    Standard 2-layer LSTM with LayerNorm and dropout.
-    Fast to train, good at capturing sequential momentum patterns.
+    2-layer LSTM with 3 classification heads for multi-horizon prediction.
+    Each head outputs 4-class logits (one per return bin).
     """
 
     def __init__(self):
@@ -93,32 +134,33 @@ class LSTMPredictor(nn.Module):
             dropout=0.2 if LSTM_LAYERS > 1 else 0.0,
         )
         self.norm = nn.LayerNorm(LSTM_HIDDEN)
-        self.fc1 = nn.Linear(LSTM_HIDDEN, LSTM_HIDDEN // 2)
-        self.relu = nn.ReLU()
-        self.drop = nn.Dropout(0.2)
-        self.fc2 = nn.Linear(LSTM_HIDDEN // 2, 1)
+        self.shared = nn.Sequential(
+            nn.Linear(LSTM_HIDDEN, LSTM_HIDDEN // 2),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+        )
+        # 3 classification heads — one per forecast horizon
+        self.head_1d = nn.Linear(LSTM_HIDDEN // 2, N_BINS)
+        self.head_3d = nn.Linear(LSTM_HIDDEN // 2, N_BINS)
+        self.head_7d = nn.Linear(LSTM_HIDDEN // 2, N_BINS)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         out, _ = self.lstm(x)
         last = self.norm(out[:, -1, :])
-        h = self.drop(self.relu(self.fc1(last)))
-        return self.fc2(h)
+        h = self.shared(last)
+        return {
+            "h1d": self.head_1d(h),
+            "h3d": self.head_3d(h),
+            "h7d": self.head_7d(h),
+        }
 
 
 # ─── Model 2: Transformer ────────────────────────────────────────────────────
 class TransformerPredictor(nn.Module):
     """
-    Multi-head self-attention encoder for stock prediction.
-
-    Why Transformer works differently from LSTM:
-    - LSTM processes sequences left-to-right, weighing recent steps more
-    - Transformer attends to ALL positions simultaneously via self-attention
-    - This means it can learn "when price crosses MA20 AND RSI > 70, what happens"
-      even if those two events are 15 days apart in the window
-    - LSTM would dilute the MA20 signal by the time it sees the RSI signal
-
-    Together they capture both sequential momentum (LSTM) and
-    pattern recognition across the full window (Transformer).
+    Multi-head self-attention encoder with 3 classification heads.
+    Attends to ALL positions simultaneously — catches long-range patterns
+    that LSTM might miss (e.g., RSI divergence 15 days ago).
     """
 
     def __init__(self):
@@ -146,21 +188,30 @@ class TransformerPredictor(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=TF_LAYERS)
 
-        # Output head
+        # Shared trunk
         self.norm = nn.LayerNorm(TF_DIM)
-        self.fc1 = nn.Linear(TF_DIM, TF_DIM // 2)
-        self.relu = nn.ReLU()
-        self.drop = nn.Dropout(0.1)
-        self.fc2 = nn.Linear(TF_DIM // 2, 1)
+        self.shared = nn.Sequential(
+            nn.Linear(TF_DIM, TF_DIM // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # 3 classification heads
+        self.head_1d = nn.Linear(TF_DIM // 2, N_BINS)
+        self.head_3d = nn.Linear(TF_DIM // 2, N_BINS)
+        self.head_7d = nn.Linear(TF_DIM // 2, N_BINS)
+
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         # x: (batch, SEQ_LEN, N_FEATURES)
         h = self.input_proj(x) + self.pe  # add positional encoding
         h = self.encoder(h)
-        # Take the last timestep (most recent day's representation)
-        out = self.norm(h[:, -1, :])
-        out = self.drop(self.relu(self.fc1(out)))
-        return self.fc2(out)
+        out = self.norm(h[:, -1, :])  # last timestep
+        out = self.shared(out)
+        return {
+            "h1d": self.head_1d(out),
+            "h3d": self.head_3d(out),
+            "h7d": self.head_7d(out),
+        }
 
 
 # ─── Technical Indicators ────────────────────────────────────────────────────
@@ -249,9 +300,11 @@ def _build_feature_matrix(
     volumes: Optional[np.ndarray] = None,
     highs: Optional[np.ndarray] = None,
     lows: Optional[np.ndarray] = None,
+    spy_prices: Optional[np.ndarray] = None,
+    vix_prices: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    12-feature matrix. Falls back gracefully if volume/OHLC not available.
+    15-feature matrix. Falls back gracefully if volume/OHLC/market data not available.
     """
     n = len(prices)
     features = np.zeros((n, N_FEATURES), dtype=np.float64)
@@ -262,30 +315,40 @@ def _build_feature_matrix(
         highs = prices * 1.005
     if lows is None:
         lows = prices * 0.995
+    if spy_prices is None:
+        spy_prices = np.full(n, 0.0)
+    if vix_prices is None:
+        vix_prices = np.full(n, 20.0)
+
+    # Truncate all to same length
+    m = min(n, len(volumes), len(highs), len(lows), len(spy_prices), len(vix_prices))
+    prices_m = prices[:m]
+    spy_m = spy_prices[:m]
+    vix_m = vix_prices[:m]
 
     # 0: normalised price
-    p_min, p_max = prices.min(), prices.max()
+    p_min, p_max = prices_m.min(), prices_m.max()
     rng = p_max - p_min if p_max != p_min else 1.0
-    features[:, 0] = (prices - p_min) / rng
+    features[:m, 0] = (prices_m - p_min) / rng
 
     # 1: daily returns
-    rets = np.zeros(n)
-    rets[1:] = (prices[1:] - prices[:-1]) / prices[:-1] * 100
-    features[:, 1] = (np.clip(rets, -10, 10) + 10) / 20
+    rets = np.zeros(m)
+    rets[1:] = (prices_m[1:] - prices_m[:-1]) / prices_m[:-1] * 100
+    features[:m, 1] = (np.clip(rets, -10, 10) + 10) / 20
 
     # 2: 5-day z-score
-    for i in range(n):
-        w = prices[max(0, i - 4) : i + 1]
+    for i in range(m):
+        w = prices_m[max(0, i - 4) : i + 1]
         mu, s = w.mean(), w.std()
-        z = (prices[i] - mu) / s if s > 0 else 0.0
+        z = (prices_m[i] - mu) / s if s > 0 else 0.0
         features[i, 2] = np.clip(z, -3, 3) / 6 + 0.5
 
     # 3: sentiment
-    features[:, 3] = float(np.clip((sentiment_score + 1.0) / 2.0, 0.0, 1.0))
+    features[:m, 3] = float(np.clip((sentiment_score + 1.0) / 2.0, 0.0, 1.0))
 
     # 4: realised volatility (20-day)
-    for i in range(n):
-        w = prices[max(0, i - 19) : i + 1]
+    for i in range(m):
+        w = prices_m[max(0, i - 19) : i + 1]
         if len(w) > 1:
             rv = float(np.std(np.diff(w) / w[:-1] * 100))
         else:
@@ -293,51 +356,134 @@ def _build_feature_matrix(
         features[i, 4] = float(np.clip(rv / 4.0, 0.0, 1.0))
 
     # 5: RSI-14
-    features[:, 5] = _rsi(prices)
+    features[:m, 5] = _rsi(prices_m)[:m]
 
     # 6: MACD
-    features[:, 6] = _macd(prices)
+    features[:m, 6] = _macd(prices_m)[:m]
 
     # 7: Bollinger position
-    features[:, 7] = _bollinger(prices)
+    features[:m, 7] = _bollinger(prices_m)[:m]
 
     # 8: SMA-20 distance
-    features[:, 8] = _sma_dist(prices)
+    features[:m, 8] = _sma_dist(prices_m)[:m]
 
     # 9: Rate of Change
-    features[:, 9] = _roc(prices)
+    features[:m, 9] = _roc(prices_m)[:m]
 
     # 10: Volume ratio
-    features[:, 10] = _vol_ratio(volumes)
+    features[:m, 10] = _vol_ratio(volumes[:m])[:m]
 
     # 11: macro fear (cross-asset volatility proxy)
-    for i in range(n):
-        w = prices[max(0, i - 19) : i + 1]
+    for i in range(m):
+        w = prices_m[max(0, i - 19) : i + 1]
         if len(w) > 1:
             rv = float(np.std(np.diff(w) / w[:-1] * 100))
         else:
             rv = 0.0
         features[i, 11] = float(np.clip(rv / 6.0, 0.0, 1.0))
 
-    return features
+    # ─── NEW: Market Context Features ─────────────────────────────────────────
+
+    # 12: SPY 5-day momentum (Are we in a bull/bear market?)
+    for i in range(m):
+        if i >= 5 and spy_m[i] > 0 and spy_m[i - 5] > 0:
+            spy_mom = (spy_m[i] - spy_m[i - 5]) / spy_m[i - 5] * 100
+            features[i, 12] = np.clip(spy_mom / 10.0 + 0.5, 0, 1)
+        else:
+            features[i, 12] = 0.5
+
+    # 13: VIX level (High VIX = fear = bad for stocks)
+    # VIX typically ranges 10-40; normalize to [0, 1] with cap at 50
+    for i in range(m):
+        if vix_m[i] > 0:
+            features[i, 13] = np.clip(vix_m[i] / 50.0, 0, 1)
+        else:
+            features[i, 13] = 0.3  # neutral default
+
+    # 14: Relative strength vs SPY (Is this stock beating the market?)
+    for i in range(m):
+        if i >= 20 and spy_m[i] > 0 and spy_m[i - 20] > 0 and prices_m[i - 20] > 0:
+            stock_ret = (prices_m[i] - prices_m[i - 20]) / prices_m[i - 20] * 100
+            spy_ret = (spy_m[i] - spy_m[i - 20]) / spy_m[i - 20] * 100
+            rel_strength = stock_ret - spy_ret
+            features[i, 14] = np.clip(rel_strength / 20.0 + 0.5, 0, 1)
+        else:
+            features[i, 14] = 0.5
+
+    return features[:m]
 
 
+# ─── Classification Targets ───────────────────────────────────────────────────
+def _build_classification_targets(prices: np.ndarray) -> Dict[str, np.ndarray]:
+    """
+    Build multi-horizon classification targets.
+    Each target is a bin index (0-3) representing the return magnitude and direction.
+    """
+    n = len(prices)
+    targets = {
+        "h1d": np.zeros(n, dtype=np.int64),
+        "h3d": np.zeros(n, dtype=np.int64),
+        "h7d": np.zeros(n, dtype=np.int64),
+    }
+    for j in range(n):
+        if j + 1 < n and prices[j] > 0:
+            ret_1d = (prices[j + 1] - prices[j]) / prices[j] * 100
+            targets["h1d"][j] = _classify_return(ret_1d)
+        if j + 3 < n and prices[j] > 0:
+            ret_3d = (prices[j + 3] - prices[j]) / prices[j] * 100
+            targets["h3d"][j] = _classify_return(ret_3d)
+        if j + 7 < n and prices[j] > 0:
+            ret_7d = (prices[j + 7] - prices[j]) / prices[j] * 100
+            targets["h7d"][j] = _classify_return(ret_7d)
+    return targets
+
+
+# ─── Legacy Compatibility ─────────────────────────────────────────────────────
 def _build_return_targets(prices: np.ndarray) -> np.ndarray:
+    """Kept for backward compatibility with logging. Not used in training."""
     r = np.zeros(len(prices))
     r[1:] = (prices[1:] - prices[:-1]) / prices[:-1] * 100
     return (np.clip(r, -10, 10) + 10) / 20
 
 
+# ─── Sequence Building ───────────────────────────────────────────────────────
 def _make_sequences(
-    features: np.ndarray, targets: np.ndarray
-) -> tuple[torch.Tensor, torch.Tensor]:
-    X, y = [], []
-    for i in range(len(features) - SEQ_LEN):
+    features: np.ndarray, targets: Dict[str, np.ndarray]
+) -> tuple:
+    """
+    Build (X, y_dict) from feature matrix and classification targets.
+    The anchor day is the last day in each sequence window.
+    Only includes samples where ALL horizons (including 7d) are valid.
+    """
+    n = len(features)
+    # Anchor day j = i + SEQ_LEN - 1; need j + 7 < len(prices) for 7d target.
+    # Since targets are indexed the same as prices, limit is n - SEQ_LEN - 6
+    limit = min(n - SEQ_LEN, n - SEQ_LEN - 6)
+    if limit <= 0:
+        # Not enough data — return empty tensors
+        empty_x = torch.zeros((0, SEQ_LEN, features.shape[1]), dtype=torch.float32)
+        empty_y = {
+            "h1d": torch.zeros(0, dtype=torch.long),
+            "h3d": torch.zeros(0, dtype=torch.long),
+            "h7d": torch.zeros(0, dtype=torch.long),
+        }
+        return empty_x, empty_y
+
+    X, y1d, y3d, y7d = [], [], [], []
+    for i in range(limit):
         X.append(features[i : i + SEQ_LEN])
-        y.append(targets[i + SEQ_LEN])
+        j = i + SEQ_LEN - 1  # anchor day (last day in window)
+        y1d.append(targets["h1d"][j])
+        y3d.append(targets["h3d"][j])
+        y7d.append(targets["h7d"][j])
+
     return (
         torch.tensor(np.array(X), dtype=torch.float32),
-        torch.tensor(np.array(y), dtype=torch.float32).unsqueeze(-1),
+        {
+            "h1d": torch.tensor(np.array(y1d), dtype=torch.long),
+            "h3d": torch.tensor(np.array(y3d), dtype=torch.long),
+            "h7d": torch.tensor(np.array(y7d), dtype=torch.long),
+        },
     )
 
 
@@ -378,18 +524,63 @@ def _fetch_ohlcv(ticker: str) -> dict:
     n = min(len(closes), len(volumes), len(highs), len(lows))
     if n < SEQ_LEN + 10:
         raise ValueError(f"Insufficient history for {ticker.upper()}.")
+
+    # ─── Fetch Market Context (SPY + VIX) ─────────────────────────────────────
+    spy_prices = np.full(n, 0.0, dtype=np.float64)
+    vix_prices = np.full(n, 20.0, dtype=np.float64)
+
+    try:
+        stock_dates = hist.index.normalize()[:n]
+
+        # SPY (S&P 500 proxy)
+        spy_hist = yf.Ticker("SPY").history(
+            period=HISTORY_PERIOD, interval="1d", auto_adjust=True
+        )
+        if spy_hist is not None and not spy_hist.empty and "Close" in spy_hist.columns:
+            spy_by_date = dict(
+                zip(spy_hist.index.normalize(), spy_hist["Close"].values)
+            )
+            for i, d in enumerate(stock_dates):
+                if d in spy_by_date:
+                    spy_prices[i] = float(spy_by_date[d])
+
+        # VIX (CBOE Volatility Index)
+        vix_hist = yf.Ticker("^VIX").history(
+            period=HISTORY_PERIOD, interval="1d", auto_adjust=True
+        )
+        if vix_hist is not None and not vix_hist.empty and "Close" in vix_hist.columns:
+            vix_by_date = dict(
+                zip(vix_hist.index.normalize(), vix_hist["Close"].values)
+            )
+            for i, d in enumerate(stock_dates):
+                if d in vix_by_date:
+                    vix_prices[i] = float(vix_by_date[d])
+    except Exception:
+        pass  # graceful degradation — market features will be neutral defaults
+
+    # Forward-fill any zero gaps in SPY/VIX (weekends already excluded by yfinance)
+    for arr in [spy_prices, vix_prices]:
+        last_val = arr[0] if arr[0] > 0 else (500.0 if arr is spy_prices else 20.0)
+        for i in range(len(arr)):
+            if arr[i] <= 0:
+                arr[i] = last_val
+            else:
+                last_val = arr[i]
+
     return {
         "closes": closes[:n],
         "volumes": volumes[:n],
         "highs": highs[:n],
         "lows": lows[:n],
         "hist": hist,
+        "spy_prices": spy_prices,
+        "vix_prices": vix_prices,
     }
 
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 def _train_lstm(
-    X: torch.Tensor, y: torch.Tensor, seed: int, lr_mult: float = 1.0
+    X: torch.Tensor, y: Dict[str, torch.Tensor], seed: int, lr_mult: float = 1.0
 ) -> LSTMPredictor:
     torch.manual_seed(seed)
     model = LSTMPredictor()
@@ -399,11 +590,16 @@ def _train_lstm(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimiser, T_max=LSTM_EPOCHS, eta_min=1e-5
     )
-    criterion = nn.HuberLoss(delta=0.5)
+    criterion = nn.CrossEntropyLoss()
     model.train()
     for _ in range(LSTM_EPOCHS):
         optimiser.zero_grad()
-        loss = criterion(model(X), y)
+        outputs = model(X)
+        loss = (
+            criterion(outputs["h1d"], y["h1d"])
+            + criterion(outputs["h3d"], y["h3d"])
+            + criterion(outputs["h7d"], y["h7d"])
+        )
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimiser.step()
@@ -412,7 +608,7 @@ def _train_lstm(
 
 
 def _train_transformer(
-    X: torch.Tensor, y: torch.Tensor, seed: int
+    X: torch.Tensor, y: Dict[str, torch.Tensor], seed: int
 ) -> TransformerPredictor:
     torch.manual_seed(seed + 9999)
     model = TransformerPredictor()
@@ -420,11 +616,16 @@ def _train_transformer(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimiser, T_max=TF_EPOCHS, eta_min=1e-5
     )
-    criterion = nn.HuberLoss(delta=0.5)
+    criterion = nn.CrossEntropyLoss()
     model.train()
     for _ in range(TF_EPOCHS):
         optimiser.zero_grad()
-        loss = criterion(model(X), y)
+        outputs = model(X)
+        loss = (
+            criterion(outputs["h1d"], y["h1d"])
+            + criterion(outputs["h3d"], y["h3d"])
+            + criterion(outputs["h7d"], y["h7d"])
+        )
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimiser.step()
@@ -432,208 +633,162 @@ def _train_transformer(
     return model
 
 
-# ─── Ensemble Rollout ─────────────────────────────────────────────────────────
-def _ensemble_predict(models: list, seq_tensor: torch.Tensor) -> float:
-    """Average predictions from all models (LSTM + Transformer)."""
-    preds = []
-    for m in models:
+def _train_xgboost(
+    X: torch.Tensor, y: Dict[str, torch.Tensor]
+) -> Optional[Dict[str, Any]]:
+    """Train 3 XGBoost classifiers (one per horizon). Returns None if XGBoost unavailable."""
+    if not HAS_XGBOOST:
+        return None
+
+    # Flatten 3D sequences (batch, seq_len, features) → 2D (batch, seq_len*features)
+    X_flat = X.numpy().reshape(X.shape[0], -1)
+
+    models = {}
+    for h_key in ["h1d", "h3d", "h7d"]:
+        y_arr = y[h_key].numpy()
+        try:
+            clf = xgb.XGBClassifier(
+                n_estimators=50,   # reduced from 100 for speed
+                max_depth=4,
+                learning_rate=0.1,  # higher LR with fewer trees
+                subsample=0.8,
+                objective="multi:softprob",
+                num_class=N_BINS,
+                eval_metric="mlogloss",
+                verbosity=0,
+                use_label_encoder=False,
+            )
+            clf.fit(X_flat, y_arr)
+            models[h_key] = clf
+        except Exception:
+            pass  # skip this horizon if XGBoost fails
+
+    return models if models else None
+
+
+# ─── Direct Multi-Horizon Prediction (NO autoregression) ─────────────────────
+def _direct_predict(
+    nn_models: list,
+    xgb_models: Optional[Dict[str, Any]],
+    features: np.ndarray,
+    prices: np.ndarray,
+) -> Dict[str, Any]:
+    """
+    Predict Day 1, Day 3, Day 7 directly from the last SEQ_LEN real data points.
+    No autoregressive rollout — each prediction uses only real, observed data.
+
+    Returns dict with keys 'h1d', 'h3d', 'h7d', each containing:
+      - probs: probability distribution over 4 bins
+      - expected_return: weighted average return (%)
+      - predicted_price: last_price * (1 + return/100)
+      - direction: 'rise' or 'fall'
+      - confidence_raw: max probability (model conviction)
+    """
+    seq = torch.tensor(features[-SEQ_LEN:], dtype=torch.float32).unsqueeze(0)
+    last_price = float(prices[-1])
+
+    # Collect probability distributions from all models
+    all_probs: Dict[str, list] = {"h1d": [], "h3d": [], "h7d": []}
+
+    # Neural network predictions
+    for m in nn_models:
         m.eval()
         with torch.no_grad():
-            preds.append(m(seq_tensor).item())
-    return float(np.mean(preds))
+            out = m(seq)
+            for h_key in ["h1d", "h3d", "h7d"]:
+                probs = torch.softmax(out[h_key], dim=-1).squeeze(0).numpy()
+                all_probs[h_key].append(probs)
+
+    # XGBoost predictions
+    if xgb_models:
+        X_flat = features[-SEQ_LEN:].reshape(1, -1)
+        for h_key in ["h1d", "h3d", "h7d"]:
+            if h_key in xgb_models:
+                try:
+                    xgb_probs = xgb_models[h_key].predict_proba(X_flat)[0]
+                    if len(xgb_probs) == N_BINS:
+                        all_probs[h_key].append(xgb_probs)
+                except Exception:
+                    pass
+
+    # Average probabilities across all models (neural nets weighted vs XGBoost)
+    results = {}
+    for h_key in ["h1d", "h3d", "h7d"]:
+        probs_list = all_probs[h_key]
+        if not probs_list:
+            # Fallback: uniform distribution
+            avg_probs = np.array([0.25, 0.25, 0.25, 0.25])
+        else:
+            # Separate NN and XGB probs for weighted blending
+            nn_probs_list = []
+            xgb_probs_list = []
+            for i, p in enumerate(probs_list):
+                if xgb_models and h_key in xgb_models and i == len(probs_list) - 1:
+                    xgb_probs_list.append(p)
+                else:
+                    nn_probs_list.append(p)
+
+            if nn_probs_list and xgb_probs_list:
+                nn_avg = np.mean(nn_probs_list, axis=0)
+                xgb_avg = np.mean(xgb_probs_list, axis=0)
+                avg_probs = NN_WEIGHT * nn_avg + XGB_WEIGHT * xgb_avg
+            else:
+                avg_probs = np.mean(probs_list, axis=0)
+
+        # Expected return = sum(prob_i * midpoint_i)
+        expected_return = float(np.sum(avg_probs * BIN_MIDPOINTS))
+        predicted_price = last_price * (1 + expected_return / 100)
+
+        results[h_key] = {
+            "probs": avg_probs.tolist(),
+            "expected_return": round(expected_return, 4),
+            "predicted_price": round(predicted_price, 4),
+            "direction": "rise" if expected_return >= 0 else "fall",
+            "confidence_raw": float(np.max(avg_probs)),
+        }
+
+    return results
 
 
-def _decode_return(
-    avg_norm: float,
-    momentum: float,
-    hist_vol: float,
-    rsi_val: float = 0.5,
-    macd_val: float = 0.5,
-    noise_std: float = 0.0,
-) -> float:
-    """
-    Decode normalised model output → daily % return.
-
-    Design: the model provides the TREND DIRECTION BIAS,
-    calibrated noise provides the DAY-TO-DAY JITTER.
-    This mimics how real stocks move: a downtrend doesn't fall
-    every single day — it has up days and down days that average to a fall.
-
-    Weights:
-      35% momentum (recent price trend)
-      30% calibrated noise (realistic daily jitter — key for jaggedness)
-      20% model signal (amplified deviation from neutral)
-      10% RSI bias (overbought/oversold correction)
-       5% MACD bias (trend confirmation)
-    """
-    # Model signal: amplify deviation from neutral 0.5
-    deviation = avg_norm - 0.5
-    model_pct = deviation * 5.0 * 20  # 5x amplification
-
-    # RSI mean-reversion bias
-    rsi_bias = 0.0
-    if rsi_val > 0.7:
-        rsi_bias = -hist_vol * 0.5  # overbought → expect pullback
-    elif rsi_val < 0.3:
-        rsi_bias = hist_vol * 0.5  # oversold → expect bounce
-
-    # MACD directional bias
-    macd_bias = (macd_val - 0.5) * hist_vol * 0.6
-
-    # Calibrated noise — this is what makes each day different
-    # Mean=0 so it doesn't bias the trend, just adds realistic daily variance
-    noise = np.random.normal(0, noise_std) if noise_std > 0 else 0.0
-
-    # Final blend
-    ret_pct = (
-        momentum * 0.35
-        + noise * 0.30
-        + model_pct * 0.20
-        + rsi_bias * 0.10
-        + macd_bias * 0.05
-    )
-
-    vol_cap = (
-        min(MAX_DAILY_RETURN_PCT, hist_vol * 2.5)
-        if hist_vol > 0
-        else MAX_DAILY_RETURN_PCT
-    )
-    return float(np.clip(ret_pct, -vol_cap, vol_cap))
-
-
-def _next_row(
-    nxt_price: float, prev_row: list, ctx: list, p_min: float, rng: float, sent_n: float
-) -> list:
-    """Build next feature row for autoregressive step."""
-    nxt_norm = (nxt_price - p_min) / rng if rng > 0 else 0.5
-    prev_p = prev_row[0] * rng + p_min
-    ret_pct = (nxt_price - prev_p) / prev_p * 100 if prev_p > 0 else 0.0
-    ret_n = (np.clip(ret_pct, -10, 10) + 10) / 20
-
-    recent = ctx[-4:] + [nxt_price]
-    mu, sigma = np.mean(recent), np.std(recent)
-    z_n = np.clip((nxt_price - mu) / sigma if sigma > 0 else 0.0, -3, 3) / 6 + 0.5
-
-    if len(ctx) > 1:
-        rv = (
-            float(np.std(np.diff(ctx[-19:]) / np.array(ctx[-19:])[:-1] * 100))
-            if len(ctx) >= 20
-            else 0.0
-        )
-        vol_feat = float(np.clip(rv / 4.0, 0.0, 1.0))
-        mac_fear = float(np.clip(rv / 6.0, 0.0, 1.0))
-    else:
-        vol_feat = prev_row[4] if len(prev_row) > 4 else 0.5
-        mac_fear = prev_row[11] if len(prev_row) > 11 else 0.0
-
-    sma_dist = (
-        np.clip(
-            (nxt_price - np.mean(ctx[-20:])) / np.mean(ctx[-20:]) * 100 / 10 + 0.5, 0, 1
-        )
-        if len(ctx) >= 20
-        else 0.5
-    )
-
-    # Carry technical indicators forward (they change slowly)
-    rsi_c = prev_row[5] if len(prev_row) > 5 else 0.5
-    macd_c = prev_row[6] if len(prev_row) > 6 else 0.5
-    boll_c = prev_row[7] if len(prev_row) > 7 else 0.5
-    volr_c = prev_row[10] if len(prev_row) > 10 else 0.5
-    roc_c = np.clip(ret_pct / 20 + 0.5, 0, 1)
-
-    return [
-        nxt_norm,
-        ret_n,
-        z_n,
-        sent_n,
-        vol_feat,
-        rsi_c,
-        macd_c,
-        boll_c,
-        sma_dist,
-        roc_c,
-        volr_c,
-        mac_fear,
-    ]
-
-
-def _rollout(
-    models: list, features: np.ndarray, prices: np.ndarray, n_days: int
+# ─── Price Interpolation ─────────────────────────────────────────────────────
+def _interpolate_prices(
+    last_price: float,
+    day1_price: float,
+    day3_price: float,
+    day7_price: float,
+    hist_vol: float = 1.0,
+    seed: int = 42,
 ) -> List[float]:
     """
-    Autoregressive rollout — produces jagged, realistic day-by-day movement.
-
-    Key fixes for straight-line problem:
-      1. noise_std = hist_vol * 0.8  (was 0.25) — much stronger noise
-      2. Momentum is REFRESHED each step from recent predicted prices
-         instead of decaying from a single starting value
-      3. RSI and MACD updated each step from new predicted prices
-      4. Model signal amplified 5x (was 4x) to overcome flat outputs
+    Interpolate 7 daily prices from 3 anchor points (Day 1, 3, 7).
+    Adds small volatility-scaled jitter to intermediate days so the chart
+    looks realistic (not a straight line between anchors).
     """
-    p_min, p_max = prices.min(), prices.max()
-    rng = p_max - p_min if p_max != p_min else 1.0
+    rng = np.random.RandomState(seed)
 
-    feat_window = features[-SEQ_LEN:].tolist()
-    ctx = list(prices[-30:])  # rolling price context
-    last_price = float(prices[-1])
-    future: List[float] = []
+    # Anchor points: day 0 = last_price (known), day 1/3/7 = predicted
+    anchors_x = [0, 1, 3, 7]
+    anchors_y = [last_price, day1_price, day3_price, day7_price]
 
-    hist_rets = np.diff(prices) / prices[:-1] * 100
-    hist_vol = float(np.std(hist_rets[-30:])) if len(hist_rets) >= 30 else 1.0
+    prices = []
+    for day in range(1, 8):
+        # Find surrounding anchors and linearly interpolate
+        for k in range(len(anchors_x) - 1):
+            if anchors_x[k] <= day <= anchors_x[k + 1]:
+                t = (day - anchors_x[k]) / (anchors_x[k + 1] - anchors_x[k])
+                p = anchors_y[k] + t * (anchors_y[k + 1] - anchors_y[k])
+                break
+        else:
+            p = day7_price  # shouldn't happen
 
-    # Initial momentum from last 5 real days
-    momentum = float(np.mean(hist_rets[-5:])) if len(hist_rets) >= 5 else 0.0
-    sent_n = float(features[-1, 3]) if features.shape[1] > 3 else 0.5
+        # Add small jitter to non-anchor days for visual realism
+        if day not in [1, 3, 7]:
+            jitter_scale = hist_vol * 0.002 * last_price  # tiny, proportional noise
+            p += rng.normal(0, jitter_scale)
 
-    # Stronger noise = realistic jagged movement (not straight line)
-    # 80% of daily vol per step so the line looks like real stock movement
-    noise_std = hist_vol * 0.8
+        prices.append(round(float(max(p, 0.01)), 4))
 
-    for m in models:
-        m.eval()
-
-    with torch.no_grad():
-        for step in range(n_days):
-            seq = torch.tensor(feat_window[-SEQ_LEN:], dtype=torch.float32).unsqueeze(0)
-            preds = [m(seq).item() for m in models]
-            avg_norm = float(np.mean(preds))
-
-            # Direction agreement vote
-            votes = [1 if p > 0.5 else -1 for p in preds]
-            agreement = abs(sum(votes)) / len(votes)
-
-            # Get CURRENT RSI and MACD from the rolling feature window
-            # (updated each step so each day gets fresh signals)
-            cur_rsi = float(feat_window[-1][5]) if len(feat_window[-1]) > 5 else 0.5
-            cur_macd = float(feat_window[-1][6]) if len(feat_window[-1]) > 6 else 0.5
-
-            ret_pct = _decode_return(
-                avg_norm, momentum, hist_vol, cur_rsi, cur_macd, noise_std
-            )
-            ret_pct *= 0.5 + 0.5 * agreement
-
-            nxt_price = last_price * (1 + ret_pct / 100)
-            future.append(round(float(nxt_price), 4))
-
-            ctx.append(nxt_price)
-            feat_window.append(
-                _next_row(nxt_price, feat_window[-1], ctx, p_min, rng, sent_n)
-            )
-            last_price = nxt_price
-
-            # FIX: refresh momentum from last 3 predicted prices each step
-            # instead of decaying from a single starting value.
-            # This means each day's momentum reflects where we are NOW,
-            # not where we started 7 days ago — producing natural reversals.
-            if len(ctx) >= 3:
-                recent_ctx = ctx[-3:]
-                step_rets = np.diff(recent_ctx) / np.array(recent_ctx[:-1]) * 100
-                new_momentum = float(np.mean(step_rets))
-                # Blend: 60% fresh momentum, 40% carry-forward
-                # This allows reversals (rise after fall) not just monotone decay
-                momentum = new_momentum * 0.6 + momentum * 0.4
-
-    return future
+    return prices
 
 
 # ─── Signals & Reasoning ─────────────────────────────────────────────────────
@@ -674,11 +829,24 @@ def _build_reasoning(
     confidence: float,
     signals: dict,
     sentiment_score: float = 0.0,
+    horizon_results: Optional[Dict] = None,
 ) -> list[str]:
     reasons = [
         f"AI model forecasts a {direction.upper()} of {pct_change:.2f}% "
         f"over the next 7 trading days (confidence: {confidence}%)."
     ]
+
+    # Multi-horizon breakdown
+    if horizon_results:
+        h1d = horizon_results.get("h1d", {})
+        h3d = horizon_results.get("h3d", {})
+        h7d = horizon_results.get("h7d", {})
+        reasons.append(
+            f"Direct predictions: Day 1 {h1d.get('expected_return', 0):+.2f}%, "
+            f"Day 3 {h3d.get('expected_return', 0):+.2f}%, "
+            f"Day 7 {h7d.get('expected_return', 0):+.2f}%."
+        )
+
     ma20 = signals.get("MA20", {}).get("value")
     ma50 = signals.get("MA50", {}).get("value")
     if ma20 and ma50:
@@ -777,16 +945,16 @@ def check_past_predictions(ticker: str) -> List[dict]:
     for entry in entries:
         existing = {o["date"] for o in entry.get("outcomes", [])}
         for pred in entry.get("predictions", []):
-            pd = pred["date"]
-            if pd in existing:
+            pd_ = pred["date"]
+            if pd_ in existing:
                 continue
             try:
-                pd_date = datetime.strptime(pd, "%Y-%m-%d").date()
+                pd_date = datetime.strptime(pd_, "%Y-%m-%d").date()
             except ValueError:
                 continue
             if pd_date > today:
                 continue
-            actual = prices_by_date.get(pd)
+            actual = prices_by_date.get(pd_)
             if actual is None:
                 for off in range(1, 4):
                     d2 = (pd_date + timedelta(days=off)).strftime("%Y-%m-%d")
@@ -801,7 +969,7 @@ def check_past_predictions(ticker: str) -> List[dict]:
                 )
                 entry.setdefault("outcomes", []).append(
                     {
-                        "date": pd,
+                        "date": pd_,
                         "predicted": predicted,
                         "actual": actual,
                         "error_pct": error_pct,
@@ -851,6 +1019,7 @@ def fine_tune_on_outcomes(
     date_to_idx = {d: i for i, d in enumerate(all_dates)}
     sent = get_sentiment(ticker.upper()) or 0.0
     features = _build_feature_matrix(prices, sentiment_score=sent)
+    targets = _build_classification_targets(prices)
 
     new_samples = []
     for entry in entries:
@@ -884,37 +1053,65 @@ def fine_tune_on_outcomes(
             torch.load(cache_path, map_location="cpu", weights_only=True)
         )
     except Exception as e:
-        return {"fine_tuned": False, "reason": f"load_error: {e}"}
+        # Architecture changed — old cache incompatible, skip fine-tuning
+        return {"fine_tuned": False, "reason": f"architecture_changed: {e}"}
 
     optimiser = torch.optim.Adam(model.parameters(), lr=FT_LR)
-    criterion = nn.HuberLoss(delta=0.5)
+    criterion = nn.CrossEntropyLoss()
     pre_losses, post_losses, used_keys = [], [], []
 
     for sample in new_samples:
         idx = sample["idx"]
-        actual_ret_pct = (
-            (sample["actual"] - sample["predicted"]) / sample["predicted"]
-        ) * 100
-        actual_ret_n = float((np.clip(actual_ret_pct, -10, 10) + 10) / 20)
-        target = torch.tensor([[actual_ret_n]], dtype=torch.float32)
+        if idx < SEQ_LEN or idx >= len(features):
+            continue
+
+        # Get classification target for this index
+        target_dict = {
+            "h1d": torch.tensor([targets["h1d"][idx]], dtype=torch.long),
+            "h3d": torch.tensor([targets["h3d"][idx]], dtype=torch.long),
+            "h7d": torch.tensor([targets["h7d"][idx]], dtype=torch.long),
+        }
         seq = torch.tensor(
             features[idx - SEQ_LEN : idx], dtype=torch.float32
         ).unsqueeze(0)
 
         model.eval()
         with torch.no_grad():
-            pre_losses.append(criterion(model(seq), target).item())
+            out = model(seq)
+            pre_loss = sum(
+                criterion(out[h], target_dict[h]).item()
+                for h in ["h1d", "h3d", "h7d"]
+            )
+            pre_losses.append(pre_loss)
+
         model.train()
         for _ in range(FT_EPOCHS):
             optimiser.zero_grad()
-            loss = criterion(model(seq), target)
+            out = model(seq)
+            loss = sum(
+                criterion(out[h], target_dict[h])
+                for h in ["h1d", "h3d", "h7d"]
+            )
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimiser.step()
+
         model.eval()
         with torch.no_grad():
-            post_losses.append(criterion(model(seq), target).item())
+            out = model(seq)
+            post_loss = sum(
+                criterion(out[h], target_dict[h]).item()
+                for h in ["h1d", "h3d", "h7d"]
+            )
+            post_losses.append(post_loss)
         used_keys.append(sample["key"])
+
+    if not used_keys:
+        return {
+            "fine_tuned": False,
+            "reason": "no_valid_samples",
+            "total_fine_tunes": ft_count_total,
+        }
 
     try:
         torch.save(model.state_dict(), cache_path)
@@ -925,6 +1122,7 @@ def fine_tune_on_outcomes(
                     "ticker": ticker.upper(),
                     "fine_tuned": True,
                     "outcomes_used": ft_count_total + len(used_keys),
+                    "version": "v4_classification",
                 },
                 mf,
             )
@@ -961,6 +1159,73 @@ def fine_tune_on_outcomes(
     }
 
 
+# ─── Auto-Retrain: Invalidate Cache if Accuracy < 50% ────────────────────────
+ACCURACY_THRESHOLD = 50.0   # % win rate below which we force a full retrain
+MIN_OUTCOMES_FOR_CHECK = 5  # need at least this many resolved predictions
+
+def _check_accuracy_and_maybe_retrain(ticker: str) -> Dict[str, Any]:
+    """
+    Compute the direction win rate across ALL resolved past predictions for
+    a ticker. If win rate < ACCURACY_THRESHOLD and we have enough samples,
+    delete the model cache so the next predict_stock call re-trains from
+    scratch (rather than loading a stale, degraded model).
+
+    Returns a dict with the accuracy check results.
+    """
+    log = _load_log()
+    entries = log.get(ticker.upper(), [])
+
+    # Collect all resolved outcomes
+    outcomes = []
+    for entry in entries:
+        direction = entry.get("direction", "")
+        for o in entry.get("outcomes", []):
+            if "correct" in o:
+                outcomes.append(o["correct"])
+
+    if len(outcomes) < MIN_OUTCOMES_FOR_CHECK:
+        return {
+            "accuracy_check": False,
+            "reason": f"only {len(outcomes)} resolved outcomes (need {MIN_OUTCOMES_FOR_CHECK})",
+        }
+
+    wins = sum(1 for c in outcomes if c)
+    win_rate = round(wins / len(outcomes) * 100, 1)
+
+    cache_path = os.path.join(MODEL_CACHE_DIR, f"{ticker.upper()}.pt")
+    meta_path  = os.path.join(MODEL_CACHE_DIR, f"{ticker.upper()}.json")
+
+    if win_rate < ACCURACY_THRESHOLD:
+        # Invalidate model cache to force full retrain next call
+        deleted = []
+        for p in [cache_path, meta_path]:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                    deleted.append(os.path.basename(p))
+                except Exception:
+                    pass
+        return {
+            "accuracy_check": True,
+            "win_rate": win_rate,
+            "total_outcomes": len(outcomes),
+            "cache_invalidated": len(deleted) > 0,
+            "deleted_files": deleted,
+            "reason": (
+                f"Win rate {win_rate}% < threshold {ACCURACY_THRESHOLD}% "
+                f"— cache purged, full retrain scheduled."
+            ),
+        }
+
+    return {
+        "accuracy_check": True,
+        "win_rate": win_rate,
+        "total_outcomes": len(outcomes),
+        "cache_invalidated": False,
+        "reason": f"Win rate {win_rate}% ≥ threshold — model healthy.",
+    }
+
+
 # ─── Backtest ─────────────────────────────────────────────────────────────────
 def backtest_stock(ticker: str, days_back: int = 7) -> Dict[str, Any]:
     try:
@@ -973,10 +1238,12 @@ def backtest_stock(ticker: str, days_back: int = 7) -> Dict[str, Any]:
         all_vols = ohlcv["volumes"]
         all_highs = ohlcv["highs"]
         all_lows = ohlcv["lows"]
+        spy_prices = ohlcv["spy_prices"]
+        vix_prices = ohlcv["vix_prices"]
         hist = ohlcv["hist"]
         all_dates = [d.strftime("%Y-%m-%d") for d in hist.index][: len(all_prices)]
 
-        if len(all_prices) < SEQ_LEN + days_back + 5:
+        if len(all_prices) < SEQ_LEN + days_back + 10:
             return {"ticker": ticker.upper(), "error": "Insufficient history."}
 
         cut_idx = len(all_prices) - days_back
@@ -992,29 +1259,61 @@ def backtest_stock(ticker: str, days_back: int = 7) -> Dict[str, Any]:
             volumes=all_vols[:cut_idx],
             highs=all_highs[:cut_idx],
             lows=all_lows[:cut_idx],
+            spy_prices=spy_prices[:cut_idx],
+            vix_prices=vix_prices[:cut_idx],
         )
-        train_targets = _build_return_targets(train_prices)
-        X, y = _make_sequences(train_features, train_targets)
+        targets = _build_classification_targets(train_prices)
+        X, y = _make_sequences(train_features, targets)
+
+        if X.shape[0] == 0:
+            return {"ticker": ticker.upper(), "error": "Insufficient training data."}
 
         seed = sum(ord(c) * (i + 1) for i, c in enumerate(ticker.upper())) % (2**31)
         np.random.seed(seed % (2**31))
 
-        models = [
+        # Train ensemble
+        nn_models = [
             _train_lstm(X, y, seed + i, [0.8, 1.2][i % 2]) for i in range(N_LSTM)
         ] + [_train_transformer(X, y, seed)]
 
-        predicted_prices = _rollout(models, train_features, train_prices, days_back)
+        xgb_models = _train_xgboost(X, y)
 
+        # Direct multi-horizon prediction
+        horizon_results = _direct_predict(
+            nn_models, xgb_models, train_features, train_prices
+        )
+
+        # Compute historical volatility for interpolation
+        hist_rets = np.diff(train_prices) / train_prices[:-1] * 100
+        hist_vol = float(np.std(hist_rets[-30:])) if len(hist_rets) >= 30 else 1.0
+
+        # Interpolate daily prices
         last_train = float(train_prices[-1])
+        predicted_prices = _interpolate_prices(
+            last_train,
+            horizon_results["h1d"]["predicted_price"],
+            horizon_results["h3d"]["predicted_price"],
+            horizon_results["h7d"]["predicted_price"],
+            hist_vol=hist_vol,
+            seed=seed,
+        )
+
+        # Trim to match actual days available
+        n_compare = min(len(predicted_prices), len(actual_prices))
+        predicted_prices = predicted_prices[:n_compare]
+
         direction = "rise" if predicted_prices[-1] > last_train else "fall"
-        actual_dir = "rise" if float(actual_prices[-1]) > last_train else "fall"
+        actual_dir = (
+            "rise" if float(actual_prices[n_compare - 1]) > last_train else "fall"
+        )
 
         rows, hits, total_err = [], 0, 0.0
-        for i, (pred_p, act_p, date) in enumerate(
-            zip(predicted_prices, actual_prices, actual_dates)
-        ):
-            act_p = round(float(act_p), 4)
-            error = round(((act_p - pred_p) / pred_p) * 100, 2) if pred_p != 0 else 0.0
+        for i in range(n_compare):
+            pred_p = predicted_prices[i]
+            act_p = round(float(actual_prices[i]), 4)
+            error = (
+                round(((act_p - pred_p) / pred_p) * 100, 2) if pred_p != 0 else 0.0
+            )
             prev_pred = predicted_prices[i - 1] if i > 0 else last_train
             prev_act = float(actual_prices[i - 1]) if i > 0 else last_train
             hit = ("rise" if pred_p > prev_pred else "fall") == (
@@ -1025,7 +1324,7 @@ def backtest_stock(ticker: str, days_back: int = 7) -> Dict[str, Any]:
             total_err += abs(error)
             rows.append(
                 {
-                    "date": date,
+                    "date": actual_dates[i] if i < len(actual_dates) else "unknown",
                     "predicted": pred_p,
                     "actual": act_p,
                     "error_pct": error,
@@ -1053,6 +1352,13 @@ def backtest_stock(ticker: str, days_back: int = 7) -> Dict[str, Any]:
             "direction_correct": direction == actual_dir,
             "grade": grade,
             "rows": rows,
+            "horizon_predictions": {
+                h: {
+                    "expected_return": horizon_results[h]["expected_return"],
+                    "direction": horizon_results[h]["direction"],
+                }
+                for h in ["h1d", "h3d", "h7d"]
+            },
         }
 
     except Exception as exc:
@@ -1062,10 +1368,10 @@ def backtest_stock(ticker: str, days_back: int = 7) -> Dict[str, Any]:
 # ─── Main Predict ─────────────────────────────────────────────────────────────
 def predict_stock(ticker: str) -> Dict[str, Any]:
     """
-    Hybrid LSTM-Transformer ensemble prediction.
-    2 LSTMs + 1 Transformer, majority-vote direction scaling.
-    12 features including RSI, MACD, Bollinger, volume, sentiment, macro fear.
-    No model fit line — only future forecast returned.
+    Multi-Horizon Classification Ensemble prediction.
+    2 LSTMs + 1 Transformer + XGBoost, all predicting 3 horizons (1d/3d/7d).
+    15 features including RSI, MACD, Bollinger, volume, sentiment, SPY, VIX.
+    No autoregressive rollout — each horizon predicted directly from real data.
     """
     try:
         ohlcv = _fetch_ohlcv(ticker)
@@ -1076,21 +1382,33 @@ def predict_stock(ticker: str) -> Dict[str, Any]:
     volumes = ohlcv["volumes"]
     highs = ohlcv["highs"]
     lows = ohlcv["lows"]
+    spy_prices = ohlcv["spy_prices"]
+    vix_prices = ohlcv["vix_prices"]
 
     sentiment_score = get_sentiment(ticker.upper()) or 0.0
     sentiment_used = sentiment_score != 0.0
 
     features = _build_feature_matrix(
-        prices, sentiment_score=sentiment_score, volumes=volumes, highs=highs, lows=lows
+        prices,
+        sentiment_score=sentiment_score,
+        volumes=volumes,
+        highs=highs,
+        lows=lows,
+        spy_prices=spy_prices,
+        vix_prices=vix_prices,
     )
-    targets = _build_return_targets(prices)
+    targets = _build_classification_targets(prices)
     X, y = _make_sequences(features, targets)
+
+    if X.shape[0] == 0:
+        return {"ticker": ticker.upper(), "error": "Insufficient data for training."}
 
     seed = sum(ord(c) * (i + 1) for i, c in enumerate(ticker.upper())) % (2**31)
     np.random.seed(seed % (2**31))
 
     try:
         check_past_predictions(ticker.upper())
+        _check_accuracy_and_maybe_retrain(ticker.upper())
     except Exception:
         pass
 
@@ -1105,7 +1423,7 @@ def predict_stock(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Cache: save/load first LSTM only (Transformer trains fast anyway)
+    # Cache: save/load first LSTM only (Transformer + XGBoost train fast anyway)
     cache_path = os.path.join(MODEL_CACHE_DIR, f"{ticker.upper()}.pt")
     meta_path = os.path.join(MODEL_CACHE_DIR, f"{ticker.upper()}.json")
     cache_valid = False
@@ -1115,16 +1433,18 @@ def predict_stock(ticker: str) -> Dict[str, Any]:
         try:
             with open(meta_path, "r") as mf:
                 meta = json.load(mf)
-            saved_at = datetime.strptime(meta["saved_at"], "%Y-%m-%d %H:%M UTC")
-            if (datetime.utcnow() - saved_at).total_seconds() / 3600 < CACHE_HOURS:
-                cached_lstm.load_state_dict(
-                    torch.load(cache_path, map_location="cpu", weights_only=True)
-                )
-                cache_valid = True
+            # Only use cache if it's the v4 classification architecture
+            if meta.get("version") == "v4_classification":
+                saved_at = datetime.strptime(meta["saved_at"], "%Y-%m-%d %H:%M UTC")
+                if (datetime.utcnow() - saved_at).total_seconds() / 3600 < CACHE_HOURS:
+                    cached_lstm.load_state_dict(
+                        torch.load(cache_path, map_location="cpu", weights_only=True)
+                    )
+                    cache_valid = True
         except Exception:
             cache_valid = False
 
-    # Build ensemble: 2 LSTMs + 1 Transformer
+    # Build ensemble: 2 LSTMs + 1 Transformer + XGBoost
     if cache_valid:
         lstm1 = cached_lstm
         lstm2 = _train_lstm(X, y, seed + 1, 1.2)
@@ -1138,6 +1458,7 @@ def predict_stock(ticker: str) -> Dict[str, Any]:
                     {
                         "saved_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                         "ticker": ticker.upper(),
+                        "version": "v4_classification",
                     },
                     mf,
                 )
@@ -1145,10 +1466,28 @@ def predict_stock(ticker: str) -> Dict[str, Any]:
             pass
 
     transformer = _train_transformer(X, y, seed)
-    models = [lstm1, lstm2, transformer]
+    nn_models = [lstm1, lstm2, transformer]
 
-    # Rollout future predictions
-    future_prices = _rollout(models, features, prices, PREDICT_DAYS)
+    # Train XGBoost ensemble member
+    xgb_models = _train_xgboost(X, y)
+
+    # Direct multi-horizon prediction (NO autoregressive rollout)
+    horizon_results = _direct_predict(nn_models, xgb_models, features, prices)
+
+    # Compute historical volatility for interpolation jitter
+    hist_rets = np.diff(prices) / prices[:-1] * 100
+    hist_vol = float(np.std(hist_rets[-30:])) if len(hist_rets) >= 30 else 1.0
+
+    # Interpolate 7 daily prices from the 3 anchor points
+    last_price_val = float(prices[-1])
+    future_prices = _interpolate_prices(
+        last_price_val,
+        horizon_results["h1d"]["predicted_price"],
+        horizon_results["h3d"]["predicted_price"],
+        horizon_results["h7d"]["predicted_price"],
+        hist_vol=hist_vol,
+        seed=seed,
+    )
 
     # Fetch display history
     try:
@@ -1172,17 +1511,26 @@ def predict_stock(ticker: str) -> Dict[str, Any]:
         last_date = datetime.strptime(hist_dates[-1], "%Y-%m-%d")
 
     pred_dates = _get_trading_dates(last_date, PREDICT_DAYS)
+
+    # Direction & confidence from multi-horizon ensemble
     last_hist = hist_prices[-1]
-    day1_pct = (future_prices[0] - last_hist) / last_hist * 100
-    overall_pct = (future_prices[-1] - last_hist) / last_hist * 100
-    weighted = day1_pct * 0.6 + overall_pct * 0.4
+    day7_ret = horizon_results["h7d"]["expected_return"]
+    day1_ret = horizon_results["h1d"]["expected_return"]
+    weighted = day1_ret * 0.4 + day7_ret * 0.6
     direction = "rise" if weighted >= 0 else "fall"
-    pct_change = abs(overall_pct)
-    confidence = round(50 + 45 * (1 - math.exp(-abs(weighted) / 1.5)), 1)
+    pct_change = abs(day7_ret)
+
+    # Confidence from average model conviction across horizons
+    avg_conviction = np.mean([
+        horizon_results[h]["confidence_raw"] for h in ["h1d", "h3d", "h7d"]
+    ])
+    # Map conviction (0.25 = random, 1.0 = certain) to display confidence (50-95%)
+    confidence = round(50 + 45 * min(1.0, (avg_conviction - 0.25) / 0.5), 1)
+    confidence = max(50.0, min(95.0, confidence))
 
     signals = _compute_signals(prices, hist_prices, hist_dates)
     reasoning = _build_reasoning(
-        direction, pct_change, confidence, signals, sentiment_score
+        direction, pct_change, confidence, signals, sentiment_score, horizon_results
     )
 
     predictions_payload = [
@@ -1224,8 +1572,26 @@ def predict_stock(ticker: str) -> Dict[str, Any]:
             ),
         },
         "model_info": {
-            "architecture": "Hybrid LSTM-Transformer Ensemble",
-            "models": f"{N_LSTM} LSTM + {N_TRANSFORM} Transformer",
+            "architecture": "Multi-Horizon Classification Ensemble (v4)",
+            "models": f"{N_LSTM} LSTM + {N_TRANSFORM} Transformer"
+            + (" + XGBoost" if xgb_models else ""),
             "features": N_FEATURES,
+            "horizons": "1d / 3d / 7d direct prediction",
+            "classification_bins": ["Strong Bear (<-2%)", "Weak Bear (-2% to 0%)",
+                                    "Weak Bull (0% to +2%)", "Strong Bull (>+2%)"],
+        },
+        "horizon_detail": {
+            h: {
+                "expected_return_pct": horizon_results[h]["expected_return"],
+                "predicted_price": horizon_results[h]["predicted_price"],
+                "direction": horizon_results[h]["direction"],
+                "bin_probabilities": {
+                    "strong_bear": round(horizon_results[h]["probs"][0], 4),
+                    "weak_bear": round(horizon_results[h]["probs"][1], 4),
+                    "weak_bull": round(horizon_results[h]["probs"][2], 4),
+                    "strong_bull": round(horizon_results[h]["probs"][3], 4),
+                },
+            }
+            for h in ["h1d", "h3d", "h7d"]
         },
     }

@@ -2,12 +2,97 @@ import { useRef, useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, ArrowRight, Loader2, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import ParticleCosmos from './ParticleCosmos'
+import { getRandomQuote, detectMarket } from '../traderQuotes'
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
   animate: { opacity: 1, y: 0, transition: { duration: 0.55, ease: [0.4, 0, 0.2, 1] } },
 }
 const stagger = { animate: { transition: { staggerChildren: 0.08 } } }
+
+// ── Rotating Trader Quote (shown during research loading) ─────────────────────
+function TraderQuote({ ticker }) {
+  const market = detectMarket(ticker)
+  const [quoteData, setQuoteData] = useState(() => getRandomQuote(market))
+  const [visible, setVisible] = useState(true)
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setVisible(false)
+      setTimeout(() => {
+        setQuoteData(getRandomQuote(market))
+        setVisible(true)
+      }, 400)
+    }, 8000)
+    return () => clearInterval(interval)
+  }, [market])
+
+  return (
+    <AnimatePresence mode="wait">
+      {visible && (
+        <motion.div
+          key={quoteData.quote}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
+          style={{
+            marginTop: 20,
+            padding: '14px 18px',
+            background: 'rgba(128, 82, 255, 0.06)',
+            border: '1px solid rgba(128, 82, 255, 0.18)',
+            borderRadius: 14,
+            backdropFilter: 'blur(8px)',
+            maxWidth: 520,
+          }}
+        >
+          <div style={{
+            fontSize: 10,
+            fontFamily: 'var(--font-acronym)',
+            letterSpacing: '0.08em',
+            color: 'var(--color-plum-voltage)',
+            marginBottom: 8,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            <span>💡</span>
+            TRADER WISDOM {market === 'pk' ? '· PSX' : '· WALL STREET'}
+          </div>
+          <p style={{
+            margin: 0,
+            fontSize: 12.5,
+            lineHeight: 1.65,
+            color: 'var(--color-ash)',
+            fontStyle: 'italic',
+            fontFamily: 'var(--font-body)',
+          }}>
+            "{quoteData.quote}"
+          </p>
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{
+              width: 24, height: 24, borderRadius: '50%',
+              background: 'rgba(128,82,255,0.2)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 11, fontWeight: 700, color: 'var(--color-plum-voltage)',
+              flexShrink: 0,
+            }}>
+              {quoteData.author[0]}
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-bone)', fontFamily: 'var(--font-acronym)' }}>
+                {quoteData.author}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--color-smoke)' }}>
+                {quoteData.role}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+}
 
 // ── Live ticker strip ─────────────────────────────────────────────────────────
 // Fallback data shown instantly while the live fetch loads
@@ -264,6 +349,9 @@ export default function HeroSection({
                     {loadingStep}
                   </motion.p>
                 )}
+
+                {/* Trader Quote — shown during loading */}
+                {loading && <TraderQuote ticker={query} />}
 
                 {/* Trending Chips */}
                 {!loading && (

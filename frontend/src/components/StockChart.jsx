@@ -9,6 +9,7 @@ import {
   ChevronDown, ChevronUp, Activity, ExternalLink, CheckCircle,
   XCircle, Clock, BarChart2, Newspaper, FlaskConical, Zap, Sparkles
 } from 'lucide-react'
+import { getRandomQuote, detectMarket } from '../traderQuotes'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
@@ -241,10 +242,11 @@ function OnlineLearningPanel({ ol }) {
 }
 
 // ─── Reasoning + Sources Panel ────────────────────────────────────────────────
-function ReasoningPanel({ reasoning = [], signals = {}, sources = [] }) {
+function ReasoningPanel({ reasoning = [], signals = {}, sources = [], ticker = '' }) {
   const [open, setOpen] = useState(false)
   const sigEntries = Object.entries(signals)
   const urlSources = sources.filter(s => s.startsWith('http'))
+  const [quote] = useState(() => getRandomQuote(detectMarket(ticker)))
 
   return (
     <div style={{ marginTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 14 }}>
@@ -369,6 +371,35 @@ function ReasoningPanel({ reasoning = [], signals = {}, sources = [] }) {
                 </div>
               </div>
             )}
+
+            {/* Trader Quote at the bottom of the reasoning panel */}
+            <div style={{
+              marginTop: 18,
+              padding: '12px 16px',
+              background: 'rgba(255, 184, 41, 0.05)',
+              border: '1px solid rgba(255, 184, 41, 0.15)',
+              borderRadius: 12,
+            }}>
+              <div style={{
+                fontSize: 9, fontFamily: 'var(--font-acronym)', letterSpacing: '0.08em',
+                color: '#ffb829', marginBottom: 7,
+                display: 'flex', alignItems: 'center', gap: 5,
+              }}>
+                <span>💡</span>
+                TRADER WISDOM
+              </div>
+              <p style={{
+                margin: 0, fontSize: 11.5, lineHeight: 1.6,
+                color: 'var(--color-ash)', fontStyle: 'italic',
+                fontFamily: 'var(--font-body)',
+              }}>
+                "{quote.quote}"
+              </p>
+              <div style={{ marginTop: 8, fontSize: 10, color: 'var(--color-smoke)', fontFamily: 'var(--font-acronym)' }}>
+                — {quote.author}, {quote.role}
+              </div>
+            </div>
+
           </motion.div>
         )}
       </AnimatePresence>
@@ -1016,6 +1047,7 @@ export default function StockChart({ ticker, sources = [] }) {
               reasoning={data?.reasoning || []}
               signals={data?.signals || {}}
               sources={sources}
+              ticker={ticker}
             />
 
             {/* Past Predictions vs Reality */}

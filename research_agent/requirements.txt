@@ -1,4 +1,4 @@
-# StockPulse backend dependencies
+# AstraQuant backend dependencies
 fastapi>=0.100.0
 pydantic>=2.0
 uvicorn[standard]>=0.20.0
@@ -10,6 +10,9 @@ python-dotenv
 groq
 langgraph
 langchain-core
-torch
+# CPU-only torch — dramatically smaller than the GPU wheel (~180 MB vs 800 MB)
+# This keeps us within Render free tier memory limits
+torch --index-url https://download.pytorch.org/whl/cpu
 numpy
 httpx
+xgboost>=2.0.0

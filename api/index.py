@@ -1,5 +1,5 @@
 """
-StockPulse — Lightweight Vercel Serverless API
+AstraQuant — Lightweight Vercel Serverless API
 Handles basic endpoints without heavy dependencies (PyTorch, LangGraph).
 The full research/prediction backend must run locally.
 """
@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 
-app = FastAPI(title="StockPulse — Vercel API", version="3.0.0")
+app = FastAPI(title="AstraQuant — Vercel API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,7 +84,7 @@ class WatchlistRequest(BaseModel):
 # ─── Health ───────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "StockPulse Vercel API", "version": "3.0.0"}
+    return {"status": "ok", "service": "AstraQuant Vercel API", "version": "3.0.0"}
 
 
 # ─── Trending ─────────────────────────────────────────────────────────────────

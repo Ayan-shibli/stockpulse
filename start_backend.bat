@@ -1,9 +1,9 @@
 @echo off
-title StockPulse - Backend (FastAPI)
+title AstraQuant - Backend (FastAPI)
 cd /d "%~dp0research_agent"
 echo.
 echo  ==========================================
-echo   StockPulse Backend - FastAPI + LangGraph
+echo   AstraQuant Backend - FastAPI + LangGraph
 echo   Running on http://localhost:8001
 echo  ==========================================
 echo.

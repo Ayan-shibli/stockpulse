@@ -29,13 +29,13 @@ from sentiment_store import save_sentiment
 
 import json
 
-app = FastAPI(title="StockPulse — LangGraph Research API", version="3.0.0")
+app = FastAPI(title="AstraQuant — LangGraph Research API", version="3.0.0")
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
     os.environ.get("FRONTEND_URL", ""),
-    "https://stockpulse.vercel.app",
+    "https://astraquant.vercel.app",
 ]
 ALLOWED_ORIGINS = [o for o in ALLOWED_ORIGINS if o]
 
@@ -314,7 +314,7 @@ async def live_prices():
 # ─── Health ───────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "StockPulse LangGraph Agent", "version": "3.0.0"}
+    return {"status": "ok", "service": "AstraQuant LangGraph Agent", "version": "3.0.0"}
 
 
 # ─── Trending ─────────────────────────────────────────────────────────────────

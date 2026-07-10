@@ -37,6 +37,8 @@ export default function App() {
   // View: 'home' | 'results' | 'watchlist' | 'compare'
   const [view, setView] = useState('home')
   const wsRef = useRef(null)
+  const wsTimeoutRef = useRef(null)
+  const gotResultRef = useRef(false)
 
   const handleAgeVerified = useCallback(() => {
     setAgeVerified(true)
@@ -74,23 +76,64 @@ export default function App() {
     setLoadingStep('Connecting to research agent…')
     setView('home') // stay in hero view while loading
 
+    // Reset result flag used by onclose guard
+    gotResultRef.current = false
+
+    // Cancel any pending fallback timeout
+    if (wsTimeoutRef.current) {
+      clearTimeout(wsTimeoutRef.current)
+      wsTimeoutRef.current = null
+    }
+
     // Close any existing WebSocket
     if (wsRef.current) {
       try { wsRef.current.close() } catch {}
       wsRef.current = null
     }
 
-    // Determine WebSocket URL
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/research`
+    // Determine WebSocket URL.
+    // In development: use current host so Vite's proxy forwards /ws to the backend.
+    // In production: use VITE_API_URL (Render backend URL) directly, not Vercel host.
+    let wsUrl
+    if (API_BASE && API_BASE !== '') {
+      // Production — API_BASE is https://xxx.onrender.com, swap scheme to wss://
+      wsUrl = API_BASE.replace(/^https/, 'wss').replace(/^http/, 'ws') + '/ws/research'
+    } else {
+      // Development — proxy via Vite
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl = `${wsProtocol}//${window.location.host}/ws/research`
+    }
+
+    const doHTTPFallback = (reason) => {
+      console.warn(`WS fallback (${reason}), switching to HTTP`)
+      if (wsRef.current) {
+        try { wsRef.current.close() } catch {}
+        wsRef.current = null
+      }
+      handleSearchHTTP(t)
+    }
 
     try {
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
+      // Safety net: if the WS connects but we get no messages in 8s,
+      // fall back to HTTP (handles silent proxy hijacking by Vite HMR).
+      wsTimeoutRef.current = setTimeout(() => {
+        if (!gotResultRef.current) {
+          doHTTPFallback('timeout')
+        }
+      }, 8000)
+
       ws.onopen = () => {
         ws.send(JSON.stringify({ ticker: t }))
         setLoadingStep('Agent started — resolving ticker…')
+        // Reset timeout on successful open — agent may take a while
+        clearTimeout(wsTimeoutRef.current)
+        // Give a generous 120s once the agent is actually running
+        wsTimeoutRef.current = setTimeout(() => {
+          if (!gotResultRef.current) doHTTPFallback('agent-timeout')
+        }, 120000)
       }
 
       ws.onmessage = (event) => {
@@ -99,12 +142,16 @@ export default function App() {
           if (msg.type === 'step') {
             setLoadingStep(msg.data)
           } else if (msg.type === 'result') {
+            gotResultRef.current = true
+            clearTimeout(wsTimeoutRef.current)
             addToHistory(msg.data.ticker || t)
             setResult(msg.data)
             setLoading(false)
             setLoadingStep('')
             ws.close()
           } else if (msg.type === 'error') {
+            gotResultRef.current = true
+            clearTimeout(wsTimeoutRef.current)
             setError(msg.data || 'Research failed.')
             setLoading(false)
             setLoadingStep('')
@@ -116,24 +163,20 @@ export default function App() {
       }
 
       ws.onerror = () => {
-        // Fallback to HTTP if WebSocket fails
-        console.warn('WebSocket failed, falling back to HTTP')
-        ws.close()
-        handleSearchHTTP(t)
+        clearTimeout(wsTimeoutRef.current)
+        if (!gotResultRef.current) doHTTPFallback('onerror')
       }
 
-      ws.onclose = (event) => {
-        // If closed without getting a result (and no error set), 
-        // it might be a server issue — fallback to HTTP
-        if (loading && !result && !error) {
-          // Check if we already fell back
-          if (wsRef.current === ws) {
-            wsRef.current = null
-          }
+      ws.onclose = () => {
+        clearTimeout(wsTimeoutRef.current)
+        // If the socket closed without us ever getting a result, fall back
+        if (!gotResultRef.current) {
+          doHTTPFallback('onclose-no-result')
         }
       }
     } catch {
       // WebSocket construction failed — fallback to HTTP
+      clearTimeout(wsTimeoutRef.current)
       handleSearchHTTP(t)
     }
   }, [query, addToHistory])
@@ -211,7 +254,7 @@ export default function App() {
                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
               </svg>
             </div>
-            <span>StockPulse</span>
+            <span>AstraQuant</span>
           </a>
 
           {/* Navigation Links */}
@@ -298,8 +341,8 @@ export default function App() {
       {/* Branded Footer */}
       <footer className="footer">
         <p>
-          StockPulse — AI Stock Research Agent.
-          {' '}© 2026 <a href="#" onClick={(e) => { e.preventDefault(); goHome() }}>StockPulse</a>
+          AstraQuant — AI Stock Research Agent.
+          {' '}© 2026 <a href="#" onClick={(e) => { e.preventDefault(); goHome() }}>AstraQuant</a>
         </p>
         <p className="footer-credit">
           Made by{' '}
